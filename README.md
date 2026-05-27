@@ -1,12 +1,13 @@
 # LongMemEval Experiment
 
-This project packages the LongMemEval source code with a Kaggle-ready reproduction notebook:
+This project packages the LongMemEval source code with Kaggle-ready experiment notebooks:
 
-- `longmemeval-kaggle-reproduce-pipeline.ipynb` runs a smoke-test pipeline on Kaggle.
+- `notebooks/longmemeval-kaggle-reproduce-pipeline.ipynb` runs a small smoke-test pipeline on Kaggle.
+- `notebooks/longmemeval-kaggle-reproduce-pipeline-executed.ipynb` preserves one executed sample run for inspection.
 - `src/` contains the LongMemEval retrieval, generation, and evaluation code.
 - `data/custom_history/` keeps the original helper for custom history compilation.
 
-The default notebook run is intentionally small: 20 examples, CPU BM25 retrieval, and API-based generation/evaluation. It is meant to verify that the pipeline, secrets, endpoint, and output format work before running the full benchmark.
+The default notebook run is intentionally tiny: 3 examples, CPU BM25 retrieval, top-5 retrieved sessions, and API-based generation/evaluation through 9router. It is meant to verify that the pipeline, secrets, endpoint, and output format work before increasing cost.
 
 ## Reference and Attribution
 
@@ -32,28 +33,29 @@ The Kaggle-facing changes are intentionally narrow:
 
 ## Kaggle Notebook Usage
 
-Open `longmemeval-kaggle-reproduce-pipeline.ipynb` in Kaggle and enable Internet unless you attach the benchmark JSON files as a Kaggle Dataset.
+Open `notebooks/longmemeval-kaggle-reproduce-pipeline.ipynb` in Kaggle and enable Internet unless you attach the benchmark JSON files as a Kaggle Dataset.
 
 Set Kaggle Secrets:
 
 - `OPENAI_API_KEY`: required for generation and QA evaluation.
-- `OPENAI_BASE_URL`: required only when using a non-OpenAI router.
+- `OPENAI_BASE_URL`: optional if the default 9router/ngrok endpoint is still valid; set it when the endpoint changes.
 - `OPENAI_ORGANIZATION`: optional.
 
 Default runtime settings:
 
 - `LONGMEMEVAL_DATASET=longmemeval_s_cleaned.json`
 - `RUN_FULL=0`
-- `N_EXAMPLES=20`
+- `N_EXAMPLES=3`
 - `RETRIEVER=flat-bm25`
 - `GRANULARITY=session`
-- `TOPK_CONTEXT=50`
-- `GEN_MODEL_NAME=gpt-4o-mini-2024-07-18`
-- `GEN_MODEL_ALIAS=gpt-4o-mini`
-- `METRIC_MODEL_SHORT=gpt-4o-mini`
-- `METRIC_MODEL_NAME=gpt-4o-mini-2024-07-18`
+- `TOPK_CONTEXT=5`
+- `GEN_LENGTH=300`
+- `GEN_MODEL_NAME=cx/gpt-5.2`
+- `GEN_MODEL_ALIAS=router-gpt-5.2`
+- `METRIC_MODEL_SHORT=router-gpt-5.2`
+- `METRIC_MODEL_NAME=cx/gpt-5.2`
 
-For an OpenAI-compatible router, set the model variables in the notebook configuration cell or as environment variables. Example:
+The notebook defaults to a 9router/OpenAI-compatible setup. If the tunnel changes, set the endpoint in Kaggle Secrets or environment variables:
 
 ```text
 OPENAI_BASE_URL=https://your-router.example/v1
@@ -63,6 +65,7 @@ METRIC_MODEL_SHORT=router-gpt-5.2
 METRIC_MODEL_NAME=cx/gpt-5.2
 TOKENIZER_BACKEND=openai
 MODEL_MAX_LENGTH=128000
+GEN_LENGTH=300
 ```
 
 To run the full benchmark, set:
@@ -72,7 +75,7 @@ RUN_FULL=1
 N_EXAMPLES=500
 ```
 
-Full runs cost more because both generation and LLM-as-judge evaluation call an API for every example.
+Full runs cost much more because both generation and LLM-as-judge evaluation call an API for every example. Increase `N_EXAMPLES` and `TOPK_CONTEXT` gradually.
 
 ## Data
 
@@ -105,16 +108,21 @@ Retrieval-augmented generation:
 
 ```bash
 export OPENAI_API_KEY=...
+export OPENAI_BASE_URL=https://your-router.example/v1
+export TOKENIZER_BACKEND=openai
+export MODEL_MAX_LENGTH=128000
 cd src/generation
-bash run_generation.sh ../../retrieval_logs/flat-bm25/session/longmemeval_s_cleaned.json_retrievallog_session_flat-bm25 gpt-4o-mini flat-bm25-session 50 json false con
+bash run_generation.sh ../../retrieval_logs/flat-bm25/session/longmemeval_s_cleaned.json_retrievallog_session_flat-bm25 router-gpt-5.2 flat-bm25-session 5 json false con
 ```
 
 QA evaluation:
 
 ```bash
 export OPENAI_API_KEY=...
+export OPENAI_BASE_URL=https://your-router.example/v1
+export METRIC_MODEL_NAME=cx/gpt-5.2
 cd src/evaluation
-python evaluate_qa.py gpt-4o-mini HYPOTHESIS_FILE ../../data/longmemeval_s_cleaned.json
+python evaluate_qa.py router-gpt-5.2 HYPOTHESIS_FILE ../../data/longmemeval_s_cleaned.json
 ```
 
 ## Notes on Comparability

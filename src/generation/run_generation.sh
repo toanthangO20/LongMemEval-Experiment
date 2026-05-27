@@ -18,6 +18,7 @@ suffix=${9:-"none"}
 declare -A model_zoo
 model_zoo["gpt-4o"]="gpt-4o-2024-08-06"
 model_zoo["gpt-4o-mini"]="gpt-4o-mini-2024-07-18"
+model_zoo["router-gpt-5.2"]="cx/gpt-5.2"
 model_zoo["llama-3-8b-instruct"]="meta-llama/Meta-Llama-3-8B-Instruct"
 model_zoo["llama-3-70b-instruct"]="meta-llama/Meta-Llama-3-70B-Instruct"
 model_zoo["llama-3.1-8b-instruct"]="meta-llama/Meta-Llama-3.1-8B-Instruct"
