@@ -1,20 +1,36 @@
 # Kế hoạch phát triển hướng nghiên cứu: Evidence-Grounded Adaptive Reflective Memory Manager
 
-**Phiên bản:** v2 — cập nhật sau khi hoàn thành A0
-**Trạng thái hiện tại:** A0 đã chạy xong trên LongMemEval-S cleaned
-**Next action chính:** A0.5 — Oracle + Diagnostic Benchmark trước khi triển khai A1/A2
+**Phiên bản:** v3 — cập nhật sau khi chạy A0.5
+**Trạng thái hiện tại:**
+- A0 đã chạy xong trên LongMemEval-S cleaned.
+- A0.5 đã chạy xong phần **Oracle Evidence Reader**.
+- A0.5 diagnostic suite còn thiếu một số phần do notebook chưa tìm thấy A0 artifacts.
+
+**Next action nhỏ ngay lập tức:**
+`A0.5b — Complete Diagnostic Suite`
+
+**Next action chính tiếp theo:**
+`A1 — Turn/chunk-level evidence retrieval + compact evidence context`
 
 ---
 
 ## 0. Tóm tắt trạng thái hiện tại
 
-Bạn đã hoàn thành bước đầu tiên:
+Bạn đã hoàn thành hai bước quan trọng:
 
 ```text
-A0 = BM25 session-level retrieval baseline trên LongMemEval-S cleaned
+A0   = BM25 session-level retrieval baseline trên LongMemEval-S cleaned
+A0.5 = Oracle evidence reader diagnostic trên answerable examples
 ```
 
-Kết quả A0 hiện tại:
+A0 tạo baseline đầy đủ.
+A0.5 xác nhận rằng bottleneck lớn hiện tại là **retrieval/context selection**, vì khi dùng oracle evidence sessions, accuracy tăng rất mạnh.
+
+---
+
+## 1. Kết quả A0 — BM25 Session Baseline
+
+### 1.1. Cấu hình A0
 
 | Hạng mục | Giá trị |
 |---|---:|
@@ -37,7 +53,7 @@ Kết quả A0 hiện tại:
 | Evaluation latency | 1,065.33 s |
 | Total latency/query | 8.7857 s |
 
-Accuracy theo nhóm:
+### 1.2. Accuracy theo nhóm câu hỏi trong A0
 
 | Eval type | n | Accuracy | Failures |
 |---|---:|---:|---:|
@@ -49,7 +65,7 @@ Accuracy theo nhóm:
 | single-session-preference | 30 | 0.6667 | 10 |
 | multi-session | 121 | 0.5455 | 55 |
 
-Retrieval metrics hiện tại:
+### 1.3. Retrieval metrics trong A0
 
 | Retrieval metric | Value |
 |---|---:|
@@ -63,190 +79,42 @@ Retrieval metrics hiện tại:
 | session recall_all@10 | 0.7588 |
 | session recall_all@20 | 0.8058 |
 
----
+### 1.4. Nhận định chính từ A0
 
-## 1. Nhận định chính từ A0
-
-A0 không chỉ là baseline, mà đã tạo ra một insight nghiên cứu rõ ràng.
-
-### 1.1. BM25 session baseline khá mạnh ở factual/update questions
-
-Các nhóm sau có accuracy tốt:
+A0 cho thấy BM25 session baseline khá mạnh ở các nhóm factual/update:
 
 ```text
-single-session-user: 0.9219
-knowledge-update: 0.9028
-single-session-assistant: 0.8393
+single-session-user:       0.9219
+knowledge-update:          0.9028
+single-session-assistant:  0.8393
 ```
 
-Điều này cho thấy baseline BM25 session-level không yếu toàn diện. Với fact đơn lẻ hoặc update rõ ràng, top-5 sessions thường đủ để reader trả lời.
-
-### 1.2. Bottleneck chính nằm ở multi-session và temporal reasoning
-
-Hai nhóm lỗi lớn nhất:
+Nhưng yếu rõ ở:
 
 ```text
-multi-session: 55 failures
-temporal-reasoning: 39 failures
+multi-session:             0.5455
+temporal-reasoning:        0.6929
+single-session-preference: 0.6667
 ```
 
-Tổng cộng:
+Hai nhóm `multi-session` và `temporal-reasoning` tạo ra:
 
 ```text
-55 + 39 = 94 / 132 failures
-≈ 71.2% toàn bộ lỗi
+55 + 39 = 94 failures
+94 / 132 ≈ 71.2% tổng failures
 ```
 
-Diễn giải:
+Insight chính từ A0:
 
-```text
-BM25 session-level retrieval không đủ tốt khi câu hỏi cần:
-- gom nhiều evidence từ nhiều session;
-- đếm, cộng, lọc, deduplicate;
-- xử lý temporal constraint;
-- phân biệt planned event với completed event;
-- tổng hợp nhiều mẩu evidence thành một kết luận.
-```
-
-### 1.3. Không nên chỉ tăng top-k session
-
-Top-k cao hơn chỉ cải thiện retrieval vừa phải:
-
-```text
-recall@5  = 0.7915
-recall@10 = 0.8255
-recall@20 = 0.8574
-```
-
-Trong khi top-5 đã tốn trung bình:
-
-```text
-16,789.94 prompt tokens/query
-```
-
-Vì vậy, tăng top-k session sẽ làm tăng token cost mạnh nhưng chưa chắc cải thiện QA tương xứng.
-
-### 1.4. Lỗi không chỉ đến từ retrieval
-
-Một số failed cases có `retrieval_miss = False`, nghĩa là gold evidence session đã nằm trong retrieved context nhưng answer vẫn sai.
-
-Điều này cho thấy có ít nhất hai bottleneck:
-
-```text
-1. Retrieval bottleneck:
-   BM25 session không luôn retrieve đủ evidence, đặc biệt với multi-session.
-
-2. Reader / reasoning bottleneck:
-   Khi evidence đã có, reader vẫn có thể:
-   - đếm sai;
-   - cộng sai;
-   - lọc sai;
-   - hiểu sai temporal condition;
-   - nhầm kế hoạch với sự kiện đã xảy ra;
-   - không đưa ra final answer đủ rõ.
-```
-
-### 1.5. Versioned Updater chưa nên là module đầu tiên
-
-Ban đầu, Versioned Memory Updater được xem là một trong các module rất quan trọng. Điều đó vẫn đúng về mặt nghiên cứu dài hạn.
-
-Tuy nhiên, A0 cho thấy:
-
-```text
-knowledge-update accuracy = 0.9028
-```
-
-Vì nhóm knowledge-update hiện chưa phải bottleneck lớn nhất, không nên ưu tiên Versioned Updater ngay sau A0.
-
-Ưu tiên mới nên là:
-
-```text
-1. A0.5 Oracle + Diagnostic
-2. A1 Turn/chunk-level evidence retrieval
-3. A2 Evidence-table reader
-4. A3 Adaptive Writer cho fact/event/preference memory
-5. A4 Evidence-grounded reflection cho multi-session
-6. A5 Temporal/event-aware retrieval
-7. A6 Versioned Updater
-```
+> Session-level BM25 retrieval không đủ tốt khi câu hỏi cần gom nhiều evidence, xử lý temporal constraint, đếm/cộng/lọc/deduplicate, hoặc phân biệt planned event với completed event.
 
 ---
 
-## 2. Định vị đề tài nghiên cứu sau A0
+## 2. Kết quả A0.5 — Oracle Evidence Reader
 
-Tên đề tài gợi ý:
+### 2.1. Cấu hình A0.5
 
-> **Evidence-Grounded Adaptive Reflective Memory Manager for Long-Term Agentic Memory**
-
-Claim chính nên điều chỉnh thành:
-
-> Session-level BM25 retrieval là baseline khá mạnh cho factual và update-style memory, nhưng yếu rõ rệt ở multi-session và temporal reasoning. Một memory manager tốt cho Agentic AI cần evidence-level indexing, structured event/preference memory, evidence-grounded reflection, temporal/event-aware retrieval, và versioned update để giảm lỗi tổng hợp, lỗi thời gian, stale memory và unsupported reflection.
-
-Không nên claim:
-
-```text
-Our method achieves SOTA.
-```
-
-Nên claim:
-
-```text
-We build an auditable long-term memory framework and show, through diagnostics and ablations, which memory mechanisms improve which long-memory abilities.
-```
-
----
-
-## 3. Roadmap cập nhật sau A0
-
-| Thứ tự | Mã | Trạng thái | Tên | Mục tiêu |
-|---:|---|---|---|---|
-| 1 | A0 | DONE | BM25 session baseline | Đã có full benchmark trên LongMemEval-S cleaned |
-| 2 | A0.5 | NEXT | Oracle + Diagnostic Benchmark | Tách lỗi retrieval vs reader, phân loại lỗi, chuẩn hóa metrics |
-| 3 | A1 | TODO | BM25 turn/chunk retrieval | Giảm nhiễu context, tăng evidence precision |
-| 4 | A2 | TODO | Evidence-table reader | Giảm lỗi đếm, cộng, lọc temporal/event |
-| 5 | A3 | TODO | Adaptive Writer | Tạo raw evidence + fact/event/preference memory |
-| 6 | A4 | TODO | Evidence-Grounded Reflective Summarizer | Hỗ trợ multi-session synthesis có evidence_ids |
-| 7 | A5 | TODO | Temporal/Event-aware Retriever | Lọc theo date, event status, time window |
-| 8 | A6 | TODO | Versioned Memory Updater | Thêm supersedes, valid_from, valid_until, active_at |
-| 9 | A7 | TODO | Adaptive Retriever / Router | Route retrieval theo query intent, không dùng gold question_type |
-| 10 | A8 | TODO | Retrospective Learner | Học lại score từ evidence miss / judge label / correction |
-| 11 | E1 | LATER | LongMemEval-M / LongMemEval-V2 | Mở rộng sang context lớn hơn hoặc agentic trajectory memory |
-
----
-
-## 4. Next action chính: A0.5 — Oracle + Diagnostic Benchmark
-
-### 4.1. Mục tiêu
-
-A0.5 cần trả lời câu hỏi:
-
-```text
-Trong 132 failures của A0:
-- Bao nhiêu lỗi là do retrieval không lấy được evidence?
-- Bao nhiêu lỗi là do retrieve được evidence nhưng reader suy luận sai?
-- Bao nhiêu lỗi là do aggregation/counting/temporal filtering?
-- Bao nhiêu lỗi là do abstention hoặc judge ambiguity?
-```
-
-Không nên chuyển sang LongMemEval-M hoặc xây full memory manager trước khi trả lời được các câu hỏi này.
-
----
-
-## 5. A0.5.1 — Oracle evidence reader
-
-### 5.1. Mục tiêu
-
-Đo reader có trả lời đúng không nếu được đưa đúng gold evidence sessions.
-
-Câu hỏi cần trả lời:
-
-```text
-Nếu retrieval hoàn hảo ở session-level, accuracy tăng lên bao nhiêu?
-```
-
-### 5.2. Cách tạo oracle setting
-
-Tạo dataset oracle từ LongMemEval-S cleaned:
+A0.5 tạo oracle dataset từ `answer_session_ids`.
 
 ```text
 Input:
@@ -254,42 +122,287 @@ Input:
 
 For each answerable example:
   - lấy answer_session_ids
-  - chỉ giữ các sessions có session_id nằm trong answer_session_ids
-  - bỏ abstention examples hoặc xử lý riêng
-```
+  - chỉ giữ các gold evidence sessions
+  - bỏ 30 abstention examples khỏi oracle run
 
 Output:
-
-```text
-longmemeval_s_cleaned_answerable_oracle.json
+  longmemeval_s_cleaned_answerable_oracle.json
 ```
 
-### 5.3. Bảng cần báo cáo
+### 2.2. Kết quả chính A0.5
 
-| Setting | Examples | Accuracy | Avg prompt tokens | Notes |
-|---|---:|---:|---:|---|
-| A0 BM25 session@5, all examples | 500 | 0.7360 | 16,789.94 | Current baseline |
-| A0 BM25 session@5, answerable only | 470 | TBD | TBD | Exclude abstention |
-| A0.5 Oracle evidence sessions | 470 | TBD | TBD | Gold evidence context |
-| A0.5 Oracle + concise reader | 470 | TBD | TBD | Optional prompt ablation |
+| Hạng mục | Giá trị |
+|---|---:|
+| Oracle answerable examples | 470 |
+| Oracle retrieval rows | 470 |
+| Missing gold sessions | 0 |
+| Oracle correct | 431 |
+| Oracle failed | 39 |
+| Oracle overall accuracy | 0.9170 |
+| Oracle task-averaged accuracy | 0.9158 |
+| Oracle avg prompt tokens/query | 8,688.60 |
+| Oracle generation latency | 2,871.74 s |
+| Oracle evaluation latency | 965.26 s |
+| Oracle total latency | 3,837.00 s |
+| Oracle latency/example | 8.16 s |
 
-### 5.4. Cách đọc oracle gap
+### 2.3. So sánh A0 answerable-only với A0.5 Oracle
 
-| Quan sát | Diễn giải | Next action |
-|---|---|---|
-| Oracle ≥ 0.85 | Retrieval/context selection là bottleneck lớn | Làm A1 turn/chunk retrieval |
-| Oracle 0.75–0.85 | Retrieval và reader đều có lỗi | Làm A1 + A2 song song |
-| Oracle gần A0 | Reader/prompt/reasoning là bottleneck chính | Ưu tiên A2 evidence-table reader |
-| Oracle temporal vẫn thấp | Cần temporal event extraction | Làm A3/A5 sớm |
-| Oracle multi-session vẫn thấp | Cần reflection/synthesis | Làm A4 sớm |
+| Setting | Examples | Correct | Failures | Accuracy | Avg prompt tokens/query |
+|---|---:|---:|---:|---:|---:|
+| A0 BM25 session@5, answerable-only | 470 | 345 | 125 | 0.7340 | 16,789.94 |
+| A0.5 Oracle evidence sessions | 470 | 431 | 39 | 0.9170 | 8,688.60 |
+
+Oracle gap:
+
+```text
+0.9170 - 0.7340 = +0.1830
+```
+
+Oracle recovered:
+
+```text
+431 - 345 = 86 examples
+86 / 125 A0 answerable failures ≈ 68.8%
+```
+
+Token reduction:
+
+```text
+16,789.94 - 8,688.60 = 8,101.34 fewer prompt tokens/query
+8,101.34 / 16,789.94 ≈ 48.25% reduction
+```
+
+### 2.4. A0 vs Oracle theo eval type
+
+| Eval type | A0 accuracy | A0 failures | Oracle accuracy | Oracle failures | Gap | Errors recovered |
+|---|---:|---:|---:|---:|---:|---:|
+| single-session-user | 0.9219 | 5 | 0.9688 | 2 | +0.0469 | 3 |
+| single-session-assistant | 0.8393 | 9 | 1.0000 | 0 | +0.1607 | 9 |
+| single-session-preference | 0.6667 | 10 | 0.8333 | 5 | +0.1666 | 5 |
+| multi-session | 0.5455 | 55 | 0.8430 | 19 | +0.2975 | 36 |
+| temporal-reasoning | 0.6929 | 39 | 0.9606 | 5 | +0.2677 | 34 |
+| knowledge-update | 0.9028 | 7 | 0.8889 | 8 | -0.0139 | -1 |
+
+### 2.5. Nhận định chính từ A0.5
+
+A0.5 cho thấy:
+
+```text
+A0 errors are largely recoverable with correct evidence.
+```
+
+Đặc biệt:
+
+```text
+multi-session:
+  A0 failures:     55
+  Oracle failures: 19
+  recovered:       36
+
+temporal-reasoning:
+  A0 failures:     39
+  Oracle failures: 5
+  recovered:       34
+```
+
+Tổng hai nhóm chính:
+
+```text
+A0 multi + temporal failures:     94
+Oracle multi + temporal failures: 24
+Oracle recovered:                 70 / 94 ≈ 74.5%
+```
+
+Diễn giải:
+
+> Bottleneck lớn nhất hiện tại không phải reader không đủ mạnh, mà là hệ thống chưa chọn được đúng và đủ evidence ở granularity phù hợp.
 
 ---
 
-## 6. A0.5.2 — Failed-case taxonomy
+## 3. Trạng thái A0.5 hiện tại
 
-### 6.1. Mục tiêu
+A0.5 đã hoàn thành phần quan trọng nhất:
 
-Tạo `failed_cases_diagnostic.csv` cho 132 failed cases.
+```text
+Oracle Evidence Reader = DONE
+```
+
+Nhưng A0.5 chưa hoàn thành toàn bộ diagnostic suite, vì notebook báo không tìm thấy A0 artifacts.
+
+Notebook đã skip các phần:
+
+```text
+Standardized retrieval metrics
+Failed-case taxonomy
+Completion length diagnostic
+```
+
+Trạng thái chi tiết:
+
+| Component | Status | Notes |
+|---|---|---|
+| Oracle evidence reader | DONE | Main A0.5 result completed |
+| Oracle summary | DONE | Oracle accuracy = 0.9170 |
+| Prompt leakage static check | DONE | Chưa thấy dấu hiệu reader đọc gold answer |
+| Standardized retrieval metrics | SKIPPED | A0 artifacts not found |
+| Failed-case taxonomy | SKIPPED | A0 artifacts not found |
+| Completion length diagnostic | SKIPPED | A0 artifacts not found |
+| Manual judge audit | TODO | Chưa làm |
+| Actual prompt dump check | TODO | Cần dump prompt thật |
+
+Vì vậy, trạng thái chính xác của A0.5 là:
+
+```text
+A0.5 = PARTIALLY DONE
+A0.5 Oracle = DONE
+A0.5 Diagnostics = INCOMPLETE
+```
+
+---
+
+## 4. Ý nghĩa nghiên cứu sau A0 + A0.5
+
+A0 + A0.5 cho phép rút ra kết luận mạnh hơn so với A0 đơn lẻ.
+
+### 4.1. Kết luận chính
+
+```text
+BM25 session-level retrieval đạt 0.7340 answerable accuracy.
+Oracle evidence sessions đạt 0.9170 answerable accuracy.
+Oracle gap = +0.1830.
+```
+
+Điều này chứng minh:
+
+> Long-term memory performance hiện bị giới hạn lớn bởi evidence selection và context construction.
+
+### 4.2. Multi-session và temporal là mục tiêu tốt nhất
+
+Hai nhóm này vừa là nhóm fail nhiều nhất ở A0, vừa là nhóm được oracle cứu nhiều nhất:
+
+```text
+multi-session gap:       +0.2975
+temporal-reasoning gap:  +0.2677
+```
+
+Do đó, hướng tiếp theo nên tập trung vào:
+
+```text
+evidence-level retrieval
+compact evidence context
+event/time metadata
+structured reasoning over evidence
+```
+
+### 4.3. A0.5 chưa phải final method contribution
+
+A0.5 dùng gold `answer_session_ids`, nên không phải một phương pháp deployable.
+
+Không nên claim:
+
+```text
+Our method achieves 0.9170 accuracy.
+```
+
+Nên claim:
+
+```text
+Oracle evidence diagnostic shows that correct evidence selection can recover 68.8% of A0 answerable failures.
+```
+
+A0.5 là một diagnostic/upper-bound result rất tốt, nhưng đóng góp chính tiếp theo phải là một phương pháp non-oracle đóng được một phần oracle gap.
+
+---
+
+## 5. Định vị đề tài nghiên cứu sau A0.5
+
+Tên đề tài vẫn giữ:
+
+> **Evidence-Grounded Adaptive Reflective Memory Manager for Long-Term Agentic Memory**
+
+Nhưng claim nên được cập nhật:
+
+> A BM25 session-level baseline performs reasonably on factual/update questions but fails on multi-session and temporal reasoning. Oracle evidence diagnostics show that 68.8% of answerable failures are recoverable when correct evidence sessions are supplied. This motivates a non-oracle evidence-grounded memory manager that retrieves compact evidence units, preserves evidence IDs, supports structured event reasoning, and later builds evidence-grounded reflections and versioned memories.
+
+Claim tiếng Việt:
+
+> BM25 session-level retrieval là baseline khá mạnh ở factual/update questions, nhưng yếu ở multi-session và temporal reasoning. A0.5 cho thấy khi cung cấp đúng evidence sessions, hệ thống cứu được 68.8% lỗi answerable. Vì vậy, hướng nghiên cứu nên tập trung vào memory manager có evidence-level retrieval, compact evidence context, structured event/preference memory, evidence-grounded reflection và temporal/versioned update.
+
+---
+
+## 6. Roadmap cập nhật sau A0.5
+
+| Thứ tự | Mã | Trạng thái | Tên | Mục tiêu |
+|---:|---|---|---|---|
+| 1 | A0 | DONE | BM25 session baseline | Full benchmark trên LongMemEval-S cleaned |
+| 2 | A0_Report | DONE | A0 report | Báo cáo baseline và phân tích lỗi sơ bộ |
+| 3 | A0.5 | PARTIAL | Oracle + Diagnostic Benchmark | Oracle done, diagnostics incomplete |
+| 4 | A0.5_Report | DONE | A0.5 report | Báo cáo oracle gap và insight retrieval bottleneck |
+| 5 | A0.5b | NEXT-SMALL | Complete Diagnostic Suite | Attach A0 artifacts, taxonomy, completion diagnostic |
+| 6 | A1 | NEXT-MAIN | Turn/chunk-level retrieval | Non-oracle method để đóng oracle gap |
+| 7 | A2 | NEXT | Evidence-table reader | Giảm lỗi aggregation/temporal/event-status |
+| 8 | A3 | TODO | Adaptive Writer | Tạo raw evidence + fact/event/preference memory |
+| 9 | A4 | TODO | Evidence-Grounded Reflective Summarizer | Hỗ trợ multi-session synthesis có evidence_ids |
+| 10 | A5 | TODO | Temporal/Event-aware Retriever | Lọc theo date, event status, time window |
+| 11 | A6 | TODO | Versioned Memory Updater | Thêm supersedes, valid_from, valid_until, active_at |
+| 12 | A7 | TODO | Adaptive Retriever / Router | Route retrieval theo query intent |
+| 13 | A8 | TODO | Retrospective Learner | Học lại score từ evidence miss / judge label / correction |
+| 14 | E1 | LATER | LongMemEval-M / LongMemEval-V2 | Mở rộng sang context lớn hơn hoặc agentic trajectory memory |
+
+---
+
+## 7. Next action nhỏ: A0.5b — Complete Diagnostic Suite
+
+### 7.1. Lý do cần A0.5b
+
+A0.5 oracle đã đủ để quyết định hướng A1.
+Nhưng để báo cáo nghiên cứu chắc hơn, cần hoàn tất các diagnostic bị skip.
+
+A0.5b không cần chạy lại oracle generation/evaluation nếu đã có output.
+A0.5b chỉ cần attach đúng A0 artifacts rồi chạy các cell diagnostic.
+
+### 7.2. A0 artifacts cần attach
+
+Cần đảm bảo notebook A0.5b đọc được các file sau:
+
+```text
+A0_bm25_session_lme_s_cleaned_hypotheses.jsonl
+A0_bm25_session_lme_s_cleaned_eval_log.jsonl
+A0_bm25_session_lme_s_cleaned_retrieval_log.jsonl
+A0_bm25_session_lme_s_cleaned_summary.json
+A0_bm25_session_lme_s_cleaned_failed_cases.csv
+```
+
+Nếu tên file khác, cần sửa path trong notebook.
+
+### 7.3. Output cần tạo trong A0.5b
+
+```text
+A0_retrieval_metrics_standardized.json
+A0_retrieval_metrics_standardized.csv
+A0_failed_case_taxonomy_sample57.csv
+A0_failed_case_taxonomy_summary.json
+A0_completion_length_diagnostic.json
+A0_prompt_sample_3.txt
+A05_oracle_prompt_sample_3.txt
+A0_judge_manual_audit.csv
+```
+
+### 7.4. Checklist A0.5b
+
+- [ ] Attach đúng A0 artifacts vào Kaggle notebook.
+- [ ] Verify `HAS_A0_ARTIFACTS = True`.
+- [ ] Chạy standardized retrieval metrics.
+- [ ] Tạo failed-case taxonomy.
+- [ ] Manual audit 57 failed cases trọng điểm.
+- [ ] Tính completion length diagnostic.
+- [ ] Dump 3 prompt thật của A0.
+- [ ] Dump 3 prompt thật của A0.5 oracle.
+- [ ] Manual check prompt không leak gold answer.
+- [ ] Audit 20 pass + 20 fail cases để kiểm tra judge consistency.
+
+### 7.5. Failed-case taxonomy cần có
 
 Mỗi failed case nên có các trường:
 
@@ -309,28 +422,28 @@ error_labels
 notes
 ```
 
-### 6.2. Error labels đề xuất
+Error labels:
 
-| Error label | Mô tả |
-|---|---|
-| `retrieval_miss` | Không retrieve được gold session nào trong top-k |
-| `partial_evidence` | Retrieve được một phần gold sessions nhưng thiếu evidence khác |
-| `retrieval_rank_low` | Gold evidence có nhưng rank thấp hoặc bị context nhiễu che mất |
-| `reader_failure` | Evidence có trong context nhưng answer sai |
-| `aggregation_error` | Đếm/cộng/tổng hợp sai |
-| `temporal_filter_error` | Lọc sai theo thời gian |
-| `event_status_error` | Nhầm planned/intended event với completed/actual event |
-| `semantic_category_error` | Hiểu sai category cần tính hoặc cần lọc |
-| `preference_inference_error` | Suy luận sai preference từ evidence |
-| `abstention_false_answer` | Cần abstain nhưng model trả lời |
-| `abstention_false_refusal` | Có answer nhưng model từ chối |
-| `judge_noise_or_format` | Answer có vẻ đúng nhưng judge chấm sai hoặc final format không rõ |
-| `truncation_or_no_final` | Output bị cắt hoặc không có final answer rõ ràng |
-| `over_context_noise` | Có evidence nhưng quá nhiều session nhiễu khiến reader sai |
+```text
+retrieval_miss
+partial_evidence
+retrieval_rank_low
+reader_failure
+aggregation_error
+temporal_filter_error
+event_status_error
+semantic_category_error
+preference_inference_error
+abstention_false_answer
+abstention_false_refusal
+judge_noise_or_format
+truncation_or_no_final
+over_context_noise
+```
 
-### 6.3. Audit thủ công tối thiểu
+### 7.6. Manual audit tối thiểu
 
-Không cần label tay toàn bộ 132 ngay. Audit trước:
+Audit trước:
 
 ```text
 20 multi-session failures
@@ -345,39 +458,7 @@ Tổng:
 57 failed cases
 ```
 
-Output:
-
-```text
-A0_failed_case_taxonomy_sample57.csv
-A0_failed_case_taxonomy_summary.json
-```
-
-### 6.4. Bảng diagnostic cần có
-
-| Eval type | Failures | Retrieval miss | Partial evidence | Reader failure | Aggregation error | Temporal error | Judge/format |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| multi-session | 55 | TBD | TBD | TBD | TBD | TBD | TBD |
-| temporal-reasoning | 39 | TBD | TBD | TBD | TBD | TBD | TBD |
-| single-session-preference | 10 | TBD | TBD | TBD | TBD | TBD | TBD |
-| abstention | 7 | TBD | TBD | TBD | TBD | TBD | TBD |
-
----
-
-## 7. A0.5.3 — Completion length diagnostic
-
-### 7.1. Lý do
-
-A0 đang dùng generation length tương đối ngắn so với một số câu hỏi multi-session/temporal.
-
-Average completion tokens:
-
-```text
-213.88
-```
-
-Nếu nhiều output chạm max token limit, một số answer có thể bị thiếu final answer hoặc thiếu bằng chứng.
-
-### 7.2. Metrics cần thêm
+### 7.7. Completion diagnostic cần tính
 
 ```text
 completion_tokens_min
@@ -390,213 +471,212 @@ hit_max_tokens_rate
 no_final_answer_rate
 ```
 
-### 7.3. Prompt ablation nhỏ
-
-Chạy lại một subset failed cases với 3 format:
-
-| Reader format | Mục tiêu |
-|---|---|
-| Current CoT-style | Baseline hiện tại |
-| Concise final-only | Giảm truncation/format noise |
-| Evidence-table reader | Giảm lỗi aggregation/temporal |
-
-Không cần chạy full 500 ngay. Chạy trước trên:
-
-```text
-20 multi-session failures
-20 temporal-reasoning failures
-```
-
----
-
-## 8. A0.5.4 — Chuẩn hóa retrieval metrics
-
-Hiện cần thống nhất một bộ retrieval metrics duy nhất.
-
-### 8.1. Population cần ghi rõ
-
-Mỗi retrieval metric phải nói rõ tính trên tập nào:
-
-```text
-all examples?
-answerable-only?
-non-abstention only?
-exclude no-user-target examples?
-session-level hay turn-level?
-```
-
-### 8.2. Metrics chuẩn đề xuất
-
-| Metric | Định nghĩa |
-|---|---|
-| `hit_any@k` | Có ít nhất một gold session trong top-k |
-| `hit_all@k` | Tất cả gold sessions nằm trong top-k |
-| `gold_fraction@k` | Tỷ lệ gold sessions được retrieve |
-| `mrr@k` | Reciprocal rank của gold session đầu tiên |
-| `ndcg@k` | Ranking quality |
-| `avg_context_tokens@k` | Context cost theo k |
-| `qa_accuracy@k` | End-to-end QA theo k nếu chạy generation |
-
-### 8.3. Không nên dùng lẫn lộn
-
-Tránh tình trạng:
-
-```text
-run_retrieval.py báo một bộ số
-print_retrieval_metrics.py báo một bộ số khác
-notebook recompute báo một bộ số khác
-```
-
-Cần tạo một script duy nhất:
-
-```text
-evaluation/standardize_retrieval_metrics.py
-```
-
-Output:
-
-```text
-A0_retrieval_metrics_standardized.json
-A0_retrieval_metrics_standardized.csv
-```
-
----
-
-## 9. A0.5.5 — Prompt leakage và judge sanity check
-
-### 9.1. Prompt leakage check
-
-Kiểm tra 5–10 prompt thực tế.
+### 7.8. Prompt leakage check
 
 Checklist:
 
 ```text
 - Reader không nhìn thấy gold answer.
-- Reader không nhìn thấy answer_session_ids dưới dạng gold label.
+- Reader không nhìn thấy answer_session_ids dưới dạng label.
 - Judge mới nhìn thấy gold answer.
 - Retrieval context chỉ gồm retrieved sessions/evidence.
-```
-
-### 9.2. Judge consistency check
-
-Manual audit:
-
-```text
-20 pass cases
-20 fail cases
-```
-
-Mục tiêu:
-
-```text
-- phát hiện judge chấm sai;
-- phát hiện answer đúng nhưng format không rõ;
-- phát hiện answer gần đúng nhưng thiếu chi tiết;
-- phát hiện hallucination.
-```
-
-Output:
-
-```text
-A0_judge_manual_audit.csv
+- Gold answer nếu có in stdout chỉ là logging, không nằm trong prompt.
 ```
 
 ---
 
-## 10. Decision sau A0.5
+## 8. Next action chính: A1 — Turn/chunk-level evidence retrieval
 
-Sau A0.5, quyết định bước tiếp theo theo bảng sau.
+### 8.1. Vì sao A1 là next-main action
 
-| Kết quả A0.5 | Diễn giải | Hành động |
-|---|---|---|
-| Oracle accuracy cao hơn A0 nhiều | Retrieval/context selection là bottleneck chính | Làm A1 turn/chunk retrieval |
-| Oracle chỉ cao hơn A0 ít | Reader/prompt/reasoning là bottleneck chính | Làm A2 evidence-table reader trước |
-| Oracle tốt ở factual nhưng vẫn thấp ở temporal | Cần event/time extraction | Làm A3 + A5 sớm |
-| Oracle tốt ở factual nhưng vẫn thấp ở multi-session | Cần synthesis/reflection | Làm A4 sớm |
-| Completion hit max token cao | Output bị truncate hoặc quá dài | Rút gọn prompt hoặc tăng max tokens |
-| Nhiều `partial_evidence` | Session-level top-k không đủ multi-evidence | A1 turn/chunk + query decomposition |
-| Nhiều `aggregation_error` | Reader không tổng hợp tốt | A2 evidence-table reader |
-| Nhiều `abstention_false_answer` | Evidence sufficiency chưa calibrated | Thêm answerability detector / threshold |
+A0.5 cho thấy oracle evidence sessions tăng answerable accuracy:
 
----
+```text
+0.7340 → 0.9170
+```
 
-## 11. A1 — BM25 turn/chunk retrieval
+Và cứu:
 
-### 11.1. Mục tiêu
+```text
+86 / 125 A0 answerable failures = 68.8%
+```
 
-Thay vì retrieve full sessions, retrieve đơn vị evidence nhỏ hơn:
+Do đó, bước chính tiếp theo phải là một phương pháp **non-oracle** để chọn evidence tốt hơn.
+
+Không nên đi ngay sang:
+
+```text
+LongMemEval-M
+BM25 session@10/session@20 làm hướng chính
+full 5-module memory manager
+Versioned Updater trước
+```
+
+Lý do:
+
+```text
+- Oracle gap lớn chứng minh retrieval/context selection là bottleneck.
+- Tăng top-k session chỉ tăng recall vừa phải nhưng tăng token cost.
+- Session-level context quá dài và nhiễu.
+- Need compact evidence, not more raw sessions.
+```
+
+### 8.2. Mục tiêu A1
+
+A1 cần thay:
+
+```text
+retrieve top-5 full sessions
+```
+
+bằng:
+
+```text
+retrieve top-k compact evidence units
+```
+
+Các đơn vị evidence:
 
 ```text
 turn-level
-chunk-level
-event-level về sau
+sliding chunk 2–4 turns
+optionally session fallback
 ```
 
-Mục tiêu:
-
-```text
-- giảm context tokens;
-- tăng evidence precision;
-- giảm over-context noise;
-- hỗ trợ reader tập trung vào đúng bằng chứng.
-```
-
-### 11.2. Indexing units
+### 8.3. Indexing units trong A1
 
 | Unit | Mô tả | Ưu điểm | Nhược điểm |
 |---|---|---|---|
 | session | Full session | Giữ nhiều context | Rất nhiễu, tốn token |
-| turn | Một user/assistant turn | Chính xác, ít token | Dễ mất context |
+| turn | Một user/assistant turn | Chính xác, ít token | Dễ mất local context |
 | sliding chunk | 2–4 turns liên tiếp | Cân bằng context và precision | Cần tune chunk size |
-| event/fact memory | Extracted memory object | Compact, structured | Cần writer/extractor |
+| session fallback | Full session khi evidence rời rạc | An toàn hơn | Tốn token nếu dùng nhiều |
+| event/fact memory | Extracted memory object | Compact, structured | Để A3 |
 
-### 11.3. Metadata bắt buộc
+### 8.4. Metadata bắt buộc cho evidence item
 
 Mỗi retrieved item phải giữ:
 
 ```json
 {
-  "evidence_id": "session_12_turn_4",
+  "evidence_id": "session_12_turn_04",
   "session_id": "session_12",
   "turn_id": 4,
+  "chunk_id": "session_12_chunk_02",
   "date": "2023-05-28",
   "role": "user",
   "text": "...",
-  "score": 12.4
+  "retrieval_score": 12.4
 }
 ```
 
-### 11.4. Output reader context mới
+### 8.5. Reader context format mới
 
-Không đưa full session. Đưa compact evidence:
+Không đưa full sessions mặc định. Đưa compact evidence:
 
 ```text
 [Evidence 1]
 date: ...
 session_id: ...
-turn_id: ...
+turn_id/chunk_id: ...
 role: ...
 text: ...
 
 [Evidence 2]
-...
+date: ...
+session_id: ...
+turn_id/chunk_id: ...
+role: ...
+text: ...
 ```
 
-### 11.5. Metrics chính
+### 8.6. A1 variants nên chạy
+
+| ID | Variant | Mục tiêu |
+|---|---|---|
+| A1.1 | BM25 turn@k | Kiểm tra granularity nhỏ nhất |
+| A1.2 | BM25 chunk-2turn@k | Giữ context gần turn |
+| A1.3 | BM25 chunk-4turn@k | Cân bằng context và recall |
+| A1.4 | Turn/chunk + session fallback | Tránh mất context |
+| A1.5 | Query decomposition cho multi-session | Retrieve nhiều evidence theo sub-questions |
+
+### 8.7. k nên thử trong A1
+
+Không nên dùng cùng top-k với session vì evidence units nhỏ hơn.
+
+Đề xuất:
+
+```text
+turn/chunk top-k = 10, 20, 30, 50
+session fallback = 0, 1, 2
+```
+
+### 8.8. Metrics chính của A1
 
 | Metric | Kỳ vọng |
 |---|---|
-| `turn_recall@k` | Tăng |
+| `answerable_accuracy` | Tăng so với A0 |
+| `overall_accuracy` | Tăng hoặc không giảm |
+| `multi-session_accuracy` | Tăng rõ |
+| `temporal_accuracy` | Tăng rõ |
+| `avg_prompt_tokens/query` | Giảm mạnh |
+| `oracle_gap` | Thu hẹp |
 | `evidence_precision@k` | Tăng |
-| `avg_prompt_tokens` | Giảm mạnh |
-| `multi-session accuracy` | Tăng nếu đủ evidence |
-| `temporal accuracy` | Tăng nếu giữ date metadata |
+| `gold_session_hit_any@k` | Không giảm quá mạnh |
+| `gold_session_hit_all@k` | Tăng hoặc giữ |
+| `context_noise_rate` | Giảm |
+
+### 8.9. A1 success criteria
+
+A1 được xem là thành công nếu đạt một trong các điều kiện:
+
+```text
+- answerable accuracy > 0.7340
+- multi-session accuracy tăng so với 0.5455
+- temporal-reasoning accuracy tăng so với 0.6929
+- prompt tokens/query giảm ít nhất 30%
+- oracle gap giảm so với 0.1830
+```
+
+Kết quả rất tốt nếu:
+
+```text
+A1 answerable accuracy đạt 0.80–0.86
+và prompt tokens/query giảm 30–60%
+```
 
 ---
 
-## 12. A2 — Evidence-table reader
+## 9. A2 — Evidence-table reader
 
-### 12.1. Mục tiêu
+### 9.1. Vì sao A2 cần làm sau hoặc song song với A1
+
+A0.5 oracle vẫn còn 39 failures:
+
+| Eval type | Oracle failures |
+|---|---:|
+| multi-session | 19 |
+| knowledge-update | 8 |
+| single-session-preference | 5 |
+| temporal-reasoning | 5 |
+| single-session-user | 2 |
+| single-session-assistant | 0 |
+
+Điều này nghĩa là ngay cả khi có đúng sessions, reader vẫn có thể sai ở:
+
+```text
+aggregation
+counting
+summing
+temporal filtering
+event status distinction
+preference inference
+update-chain reasoning
+```
+
+Do đó A2 nên cải thiện reader format.
+
+### 9.2. Mục tiêu A2
 
 Giảm lỗi:
 
@@ -605,15 +685,10 @@ aggregation_error
 temporal_filter_error
 event_status_error
 semantic_category_error
+preference_inference_error
 ```
 
-Đây là các lỗi rất có khả năng xuất hiện trong multi-session và temporal-reasoning.
-
-### 12.2. Prompt format đề xuất
-
-Reader nên được yêu cầu tạo bảng evidence ngắn trước khi trả lời.
-
-Format:
+### 9.3. Prompt format đề xuất
 
 ```text
 For each relevant evidence item, extract:
@@ -623,10 +698,11 @@ For each relevant evidence item, extract:
 - value/count/amount if any
 - include_or_exclude
 - reason
+
 Then answer using only included rows.
 ```
 
-### 12.3. Output format
+### 9.4. Output format mong muốn
 
 ```text
 Evidence table:
@@ -639,35 +715,39 @@ Evidence table:
 Final answer: $850
 ```
 
-### 12.4. Evaluation
+### 9.5. A2 evaluation trước khi chạy full
 
 Chạy trước trên subset:
 
 ```text
-all multi-session failures from A0
-all temporal-reasoning failures from A0
+all A0 multi-session failures
+all A0 temporal-reasoning failures
+all oracle remaining multi-session failures
+all oracle remaining temporal failures
 ```
 
-Sau đó mới chạy full 500 nếu kết quả tốt.
+Sau đó mới chạy full 500 nếu tốt.
 
-Metrics:
+### 9.6. A2 success criteria
 
-| Metric | Kỳ vọng |
-|---|---|
-| `aggregation_error_rate` | Giảm |
-| `temporal_filter_error_rate` | Giảm |
-| `event_status_error_rate` | Giảm |
-| `multi-session accuracy` | Tăng |
-| `temporal-reasoning accuracy` | Tăng |
-| `completion_tokens` | Có thể tăng nhẹ, cần kiểm soát |
+A2 thành công nếu:
+
+```text
+- giảm aggregation_error_rate
+- giảm temporal_filter_error_rate
+- giảm event_status_error_rate
+- tăng multi-session accuracy
+- tăng temporal-reasoning accuracy
+- không làm completion_tokens tăng quá nhiều
+```
 
 ---
 
-## 13. A3 — Adaptive Writer
+## 10. A3 — Adaptive Writer
 
-### 13.1. Mục tiêu
+### 10.1. Mục tiêu
 
-Tạo memory store có cấu trúc từ raw history.
+Sau A1/A2, bắt đầu chuyển từ retrieval đơn thuần sang memory manager có cấu trúc.
 
 Các lớp memory:
 
@@ -680,7 +760,7 @@ reflection memory
 versioned memory
 ```
 
-### 13.2. Schema raw evidence
+### 10.2. Schema raw evidence
 
 ```json
 {
@@ -694,7 +774,7 @@ versioned memory
 }
 ```
 
-### 13.3. Schema memory object
+### 10.3. Schema memory object
 
 ```json
 {
@@ -715,9 +795,9 @@ versioned memory
 }
 ```
 
-### 13.4. Writer focus sau A0
+### 10.4. Writer focus sau A0.5
 
-Vì A0 yếu nhất ở multi-session và temporal, writer nên ưu tiên:
+Vì A0.5 cho thấy multi-session và temporal được oracle cứu nhiều nhất, writer nên ưu tiên:
 
 ```text
 event extraction
@@ -728,7 +808,7 @@ event status extraction: planned / completed / cancelled / intended
 evidence_ids for every memory
 ```
 
-### 13.5. Metrics
+### 10.5. Metrics cho Adaptive Writer
 
 | Metric | Mục tiêu |
 |---|---|
@@ -742,20 +822,27 @@ evidence_ids for every memory
 
 ---
 
-## 14. A4 — Evidence-Grounded Reflective Summarizer
+## 11. A4 — Evidence-Grounded Reflective Summarizer
 
-### 14.1. Mục tiêu
+### 11.1. Mục tiêu
 
-A0 cho thấy multi-session là nhóm yếu nhất:
+A0 multi-session thấp nhất:
 
 ```text
 multi-session accuracy = 0.5455
-failures = 55
 ```
 
-Do đó reflection nên được ưu tiên trước Versioned Updater.
+A0.5 oracle cải thiện mạnh:
 
-### 14.2. Nguyên tắc
+```text
+multi-session oracle accuracy = 0.8430
+```
+
+Điều này cho thấy multi-session cần đúng evidence và cần synthesis tốt.
+
+Reflection nên hỗ trợ synthesis, nhưng phải evidence-grounded.
+
+### 11.2. Nguyên tắc
 
 Reflection không được là summary tự do.
 
@@ -771,7 +858,7 @@ valid_until
 status
 ```
 
-### 14.3. Reflection schema
+### 11.3. Reflection schema
 
 ```json
 {
@@ -797,7 +884,7 @@ status
 }
 ```
 
-### 14.4. Reflection validator
+### 11.4. Reflection validator
 
 ```text
 Input:
@@ -818,7 +905,7 @@ Nếu unsupported:
 - hoặc lưu trạng thái draft, không dùng cho retrieval chính.
 ```
 
-### 14.5. Metrics
+### 11.5. Metrics
 
 | Metric | Mục tiêu |
 |---|---|
@@ -830,18 +917,25 @@ Nếu unsupported:
 
 ---
 
-## 15. A5 — Temporal/Event-aware Retriever
+## 12. A5 — Temporal/Event-aware Retriever
 
-### 15.1. Mục tiêu
+### 12.1. Mục tiêu
 
 A0 temporal-reasoning còn thấp:
 
 ```text
 temporal-reasoning accuracy = 0.6929
-failures = 39
 ```
 
-Cần retrieval có hiểu:
+A0.5 oracle rất cao:
+
+```text
+temporal-reasoning oracle accuracy = 0.9606
+```
+
+Điều này cho thấy temporal errors phần lớn đến từ evidence selection/context construction.
+
+A5 cần retrieval hiểu:
 
 ```text
 date
@@ -853,7 +947,7 @@ planned vs completed
 current vs past
 ```
 
-### 15.2. Strategy
+### 12.2. Strategy
 
 | Query type | Strategy |
 |---|---|
@@ -864,7 +958,7 @@ current vs past
 | ask changed/updated | Retrieve old + new evidence |
 | ask plan vs actual | Ưu tiên completed/confirmed events, loại planned-only nếu question yêu cầu actual |
 
-### 15.3. Metrics
+### 12.3. Metrics
 
 | Metric | Mục tiêu |
 |---|---|
@@ -876,11 +970,11 @@ current vs past
 
 ---
 
-## 16. A6 — Versioned Memory Updater
+## 13. A6 — Versioned Memory Updater
 
-### 16.1. Mục tiêu
+### 13.1. Mục tiêu
 
-Dù không phải bottleneck đầu tiên sau A0, Versioned Updater vẫn là module quan trọng để định vị Agentic AI memory.
+Dù không phải bottleneck đầu tiên sau A0/A0.5, Versioned Updater vẫn là module quan trọng để định vị Agentic AI memory.
 
 Không ghi đè thô. Dùng:
 
@@ -892,7 +986,23 @@ status
 active_at(question_date)
 ```
 
-### 16.2. Update schema
+### 13.2. Vì sao chưa ưu tiên ngay
+
+A0 cho thấy:
+
+```text
+knowledge-update accuracy = 0.9028
+```
+
+A0.5 oracle cho thấy:
+
+```text
+knowledge-update oracle accuracy = 0.8889
+```
+
+Do đó, update không phải bottleneck lớn nhất hiện tại. Versioned Updater nên làm sau A1/A2/A3/A5.
+
+### 13.3. Update schema
 
 Memory cũ:
 
@@ -920,7 +1030,7 @@ Memory mới:
 }
 ```
 
-### 16.3. Conflict/update detection labels
+### 13.4. Conflict/update detection labels
 
 ```text
 SAME_FACT
@@ -931,7 +1041,7 @@ TEMPORAL_UPDATE
 IRRELEVANT
 ```
 
-### 16.4. Metrics
+### 13.5. Metrics
 
 | Metric | Mục tiêu |
 |---|---|
@@ -943,9 +1053,9 @@ IRRELEVANT
 
 ---
 
-## 17. A7 — Adaptive Retriever / Query Router
+## 14. A7 — Adaptive Retriever / Query Router
 
-### 17.1. Nguyên tắc
+### 14.1. Nguyên tắc
 
 Không dùng gold `question_type` trong final system.
 
@@ -959,7 +1069,7 @@ analysis only
 
 Final system phải tự predict intent.
 
-### 17.2. Query intent labels
+### 14.2. Query intent labels
 
 ```text
 factual
@@ -970,7 +1080,7 @@ multi_session
 abstention_risk
 ```
 
-### 17.3. Retrieval strategy theo intent
+### 14.3. Retrieval strategy theo intent
 
 | Intent | Strategy |
 |---|---|
@@ -981,7 +1091,7 @@ abstention_risk
 | multi_session | reflection + supporting evidence |
 | abstention_risk | evidence sufficiency threshold |
 
-### 17.4. Scoring function
+### 14.4. Scoring function
 
 ```text
 score =
@@ -996,7 +1106,7 @@ score =
 - unsupported_reflection_penalty
 ```
 
-### 17.5. Evaluation
+### 14.5. Evaluation
 
 | Setting | Dùng gold type? | Mục đích |
 |---|---|---|
@@ -1008,9 +1118,9 @@ score =
 
 ---
 
-## 18. A8 — Retrospective Learner
+## 15. A8 — Retrospective Learner
 
-### 18.1. Mục tiêu
+### 15.1. Mục tiêu
 
 Sau khi trả lời, dùng feedback để cập nhật:
 
@@ -1022,7 +1132,7 @@ staleness_penalty
 router weights
 ```
 
-### 18.2. Protocol tránh leakage
+### 15.2. Protocol tránh leakage
 
 Không dùng gold label của final test để tune rồi báo cáo trên chính test đó.
 
@@ -1033,7 +1143,7 @@ dev_stratified: tune thresholds, weights, router prompt
 test_final: freeze config, run once
 ```
 
-### 18.3. Feedback signals
+### 15.3. Feedback signals
 
 | Signal | Dùng ở đâu |
 |---|---|
@@ -1044,7 +1154,7 @@ test_final: freeze config, run once
 | user correction | simulated hoặc future interactive |
 | abstention false positive | dev calibration |
 
-### 18.4. Score update rules
+### 15.4. Score update rules
 
 ```text
 memory_score += 0.1 nếu memory được dùng trong answer đúng
@@ -1056,36 +1166,38 @@ staleness_penalty += nếu knowledge-update dùng old memory
 
 ---
 
-## 19. Bảng ablation cập nhật
+## 16. Bảng ablation cập nhật
 
-| ID | System | Status | Overall | Multi-session | Temporal | Update | Abstention | Tokens/query | Mục đích |
-|---|---|---|---:|---:|---:|---:|---:|---:|---|
-| A0 | BM25 session@5 | DONE | 0.7360 | 0.5455 | 0.6929 | 0.9028 | 0.7667 | 16,789.94 | Baseline |
-| A0.5 | Oracle evidence reader | NEXT | TBD | TBD | TBD | TBD | TBD | TBD | Tách retrieval vs reader |
-| A1 | BM25 turn/chunk | TODO | TBD | TBD | TBD | TBD | TBD | TBD | Evidence-level retrieval |
-| A2 | Evidence-table reader | TODO | TBD | TBD | TBD | TBD | TBD | TBD | Giảm aggregation/temporal errors |
-| A3 | Adaptive Writer | TODO | TBD | TBD | TBD | TBD | TBD | TBD | Structured memory |
-| A4 | Evidence-grounded Reflection | TODO | TBD | TBD | TBD | TBD | TBD | TBD | Multi-session synthesis |
-| A5 | Temporal/Event-aware Retriever | TODO | TBD | TBD | TBD | TBD | TBD | TBD | Temporal reasoning |
-| A6 | Versioned Updater | TODO | TBD | TBD | TBD | TBD | TBD | TBD | Stale/update handling |
-| A7 | Adaptive Retriever | TODO | TBD | TBD | TBD | TBD | TBD | TBD | Intent-aware retrieval |
-| A8 | Retrospective Learner | TODO | TBD | TBD | TBD | TBD | TBD | TBD | Feedback-driven scoring |
+| ID | System | Status | Overall | Answerable | Multi-session | Temporal | Update | Abstention | Tokens/query | Mục đích |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| A0 | BM25 session@5 | DONE | 0.7360 | 0.7340 | 0.5455 | 0.6929 | 0.9028 | 0.7667 | 16,789.94 | Baseline |
+| A0.5 | Oracle evidence reader | ORACLE DONE | N/A | 0.9170 | 0.8430 | 0.9606 | 0.8889 | N/A | 8,688.60 | Upper-bound diagnostic |
+| A0.5b | Complete diagnostics | NEXT-SMALL | TBD | TBD | TBD | TBD | TBD | TBD | TBD | Taxonomy + prompt/completion audit |
+| A1 | BM25 turn/chunk | NEXT-MAIN | TBD | TBD | TBD | TBD | TBD | TBD | TBD | Non-oracle evidence retrieval |
+| A2 | Evidence-table reader | NEXT | TBD | TBD | TBD | TBD | TBD | TBD | TBD | Giảm aggregation/temporal errors |
+| A3 | Adaptive Writer | TODO | TBD | TBD | TBD | TBD | TBD | TBD | TBD | Structured memory |
+| A4 | Evidence-grounded Reflection | TODO | TBD | TBD | TBD | TBD | TBD | TBD | TBD | Multi-session synthesis |
+| A5 | Temporal/Event-aware Retriever | TODO | TBD | TBD | TBD | TBD | TBD | TBD | TBD | Temporal reasoning |
+| A6 | Versioned Updater | TODO | TBD | TBD | TBD | TBD | TBD | TBD | TBD | Stale/update handling |
+| A7 | Adaptive Retriever | TODO | TBD | TBD | TBD | TBD | TBD | TBD | TBD | Intent-aware retrieval |
+| A8 | Retrospective Learner | TODO | TBD | TBD | TBD | TBD | TBD | TBD | TBD | Feedback-driven scoring |
 
 ---
 
-## 20. Metrics cần báo cáo xuyên suốt
+## 17. Metrics cần báo cáo xuyên suốt
 
-### 20.1. QA metrics
+### 17.1. QA metrics
 
 | Metric | Mục đích |
 |---|---|
 | `overall_accuracy` | Kết quả end-to-end |
+| `answerable_accuracy` | Accuracy không tính abstention |
 | `macro_accuracy_by_type` | Tránh overall bị che bởi nhóm lớn |
 | `accuracy_by_eval_type` | Biết module nào giúp nhóm nào |
 | `abstention_accuracy` | Đánh giá refusal/no-answer |
 | `false_answer_rate` | Tỷ lệ bịa khi nên abstain |
 
-### 20.2. Retrieval metrics
+### 17.2. Retrieval metrics
 
 | Metric | Mục đích |
 |---|---|
@@ -1097,7 +1209,7 @@ staleness_penalty += nếu knowledge-update dùng old memory
 | `evidence_precision@k` | Giảm nhiễu |
 | `oracle_gap` | Tách retrieval vs reader |
 
-### 20.3. Reader/reasoning metrics
+### 17.3. Reader/reasoning metrics
 
 | Metric | Mục đích |
 |---|---|
@@ -1108,7 +1220,7 @@ staleness_penalty += nếu knowledge-update dùng old memory
 | `no_final_answer_rate` | Output không rõ final |
 | `hit_max_tokens_rate` | Bị giới hạn output |
 
-### 20.4. Memory metrics
+### 17.4. Memory metrics
 
 | Metric | Mục đích |
 |---|---|
@@ -1120,7 +1232,7 @@ staleness_penalty += nếu knowledge-update dùng old memory
 | `stale_memory_error_rate` | Dùng memory hết hiệu lực |
 | `validity_filter_precision` | Lọc đúng memory theo thời gian |
 
-### 20.5. Efficiency metrics
+### 17.5. Efficiency metrics
 
 | Metric | Mục đích |
 |---|---|
@@ -1132,7 +1244,7 @@ staleness_penalty += nếu knowledge-update dùng old memory
 
 ---
 
-## 21. Implementation structure cập nhật
+## 18. Implementation structure cập nhật
 
 ```text
 memory_manager/
@@ -1178,6 +1290,7 @@ memory_manager/
     experiments/
       run_A0_bm25_session.py
       run_A05_oracle_diagnostic.py
+      run_A05b_complete_diagnostic.py
       run_A1_bm25_turn_chunk.py
       run_A2_evidence_table_reader.py
       run_A3_writer.py
@@ -1188,14 +1301,17 @@ memory_manager/
   results/
     A0_bm25_session/
     A05_oracle_diagnostic/
+    A05b_complete_diagnostic/
     A1_bm25_turn_chunk/
     A2_evidence_table_reader/
   reports/
+    A0_Report.md
+    A0.5_Report.md
 ```
 
 ---
 
-## 22. Chuẩn output cho mỗi experiment
+## 19. Chuẩn output cho mỗi experiment
 
 Mỗi experiment nên có cùng format:
 
@@ -1211,52 +1327,91 @@ experiment_id/
   cost_latency.csv
 ```
 
-A0.5 nên có thêm:
+A0.5b nên có thêm:
 
 ```text
-A05_oracle_diagnostic/
-  oracle_dataset.json
-  oracle_hypotheses.jsonl
-  oracle_eval_log.jsonl
-  oracle_summary.json
-  failed_case_taxonomy_sample57.csv
-  failed_case_taxonomy_summary.json
-  completion_length_diagnostic.json
-  retrieval_metrics_standardized.json
-  judge_manual_audit.csv
-  prompt_leakage_check.md
+A05b_complete_diagnostic/
+  A0_retrieval_metrics_standardized.json
+  A0_retrieval_metrics_standardized.csv
+  A0_failed_case_taxonomy_sample57.csv
+  A0_failed_case_taxonomy_summary.json
+  A0_completion_length_diagnostic.json
+  A0_prompt_sample_3.txt
+  A05_oracle_prompt_sample_3.txt
+  A0_judge_manual_audit.csv
+```
+
+A1 nên có:
+
+```text
+A1_bm25_turn_chunk/
+  config.yaml
+  turn_index.jsonl
+  chunk_index.jsonl
+  retrieval_log.jsonl
+  retrieval_metrics.json
+  token_estimate.json
+  hypotheses.jsonl
+  eval_log.jsonl
+  summary.json
+  failed_cases.csv
 ```
 
 ---
 
-## 23. Checklist ngay bây giờ
+## 20. Checklist hiện tại
 
-### A0 — Done / cần đóng gói
+### A0 — Done
 
 - [x] Chạy full A0 BM25 session trên LongMemEval-S cleaned.
 - [x] Có overall accuracy.
+- [x] Có answerable-only accuracy.
 - [x] Có accuracy theo eval_type.
 - [x] Có retrieval metrics.
 - [x] Có token/cost/latency.
 - [x] Có failed examples.
+- [x] Viết `A0_Report.md`.
 - [ ] Chuẩn hóa retrieval metrics bằng một script duy nhất.
-- [ ] Đóng gói A0 summary thành `A0_bm25_session_report.md`.
+- [ ] Hoàn tất manual judge audit.
 
-### A0.5 — Next action
+### A0.5 — Partially Done
 
-- [ ] Tạo oracle dataset từ `answer_session_ids`.
-- [ ] Chạy oracle evidence reader trên answerable examples.
-- [ ] So sánh A0 vs Oracle.
+- [x] Tạo oracle dataset từ `answer_session_ids`.
+- [x] Chạy oracle evidence reader trên 470 answerable examples.
+- [x] So sánh A0 vs Oracle.
+- [x] Tính oracle gap.
+- [x] Tính token reduction oracle vs A0.
+- [x] Static prompt leakage check.
+- [x] Viết `A0.5_Report.md`.
 - [ ] Tạo failed-case taxonomy.
 - [ ] Manual audit 57 failed cases trọng điểm.
 - [ ] Tính completion length diagnostic.
-- [ ] Kiểm tra prompt leakage.
+- [ ] Dump actual prompts.
 - [ ] Audit judge consistency trên 20 pass + 20 fail cases.
-- [ ] Ra quyết định A1 hay A2 là bước tiếp theo dựa trên oracle gap.
+
+### A0.5b — Next-small
+
+- [ ] Attach A0 artifacts vào A0.5b notebook.
+- [ ] Verify artifacts path.
+- [ ] Chạy skipped diagnostics.
+- [ ] Cập nhật `A0.5_Report.md` nếu có phát hiện mới.
+- [ ] Chốt error taxonomy để hỗ trợ A1/A2.
+
+### A1 — Next-main
+
+- [ ] Build turn-level index.
+- [ ] Build chunk-level index.
+- [ ] Implement BM25 turn retrieval.
+- [ ] Implement BM25 chunk retrieval.
+- [ ] Implement compact evidence context.
+- [ ] Run retrieval-only metrics trước.
+- [ ] Estimate token cost.
+- [ ] Run generation/evaluation nếu retrieval-only tốt.
+- [ ] Compare A1 vs A0 vs Oracle.
 
 ---
 
-## 24. Việc không nên làm ngay
+## 21. Việc không nên làm ngay
 
 Không nên làm các việc sau ở thời điểm hiện tại:
 
@@ -1264,8 +1419,9 @@ Không nên làm các việc sau ở thời điểm hiện tại:
 - Không chạy LongMemEval-M ngay.
 - Không tăng top-k session lên 10/20 như hướng chính.
 - Không implement full 5-module memory manager ngay.
-- Không ưu tiên Versioned Updater trước khi hiểu rõ lỗi multi-session/temporal.
+- Không ưu tiên Versioned Updater trước A1/A2.
 - Không dùng gold question_type trong final retriever.
+- Không claim A0.5 oracle là final method.
 - Không chỉ báo cáo overall accuracy.
 - Không claim SOTA.
 - Không bỏ qua token cost.
@@ -1274,73 +1430,199 @@ Không nên làm các việc sau ở thời điểm hiện tại:
 Lý do:
 
 ```text
-A0 đã cho thấy vấn đề chính không đơn thuần là thiếu nhiều session hơn.
-Vấn đề nằm ở evidence granularity, multi-evidence synthesis, temporal/event reasoning,
-và khả năng reader xử lý structured evidence.
+A0.5 đã cho thấy oracle evidence cứu được 68.8% answerable failures.
+Vấn đề trước mắt là đóng oracle gap bằng phương pháp non-oracle,
+không phải thêm nhiều session hơn hoặc chuyển ngay sang benchmark lớn hơn.
 ```
 
 ---
 
-## 25. Contribution statements cập nhật
+## 22. Contribution statements cập nhật
 
-### Contribution 1 — Reproducible A0 baseline and diagnostic insight
+### Contribution 1 — Reproducible A0 baseline
 
 > We reproduce a full LongMemEval-S cleaned BM25 session-level baseline and show that session retrieval performs strongly on single-session factual and knowledge-update questions, but fails substantially on multi-session and temporal reasoning.
 
-### Contribution 2 — Oracle-gap diagnostic protocol
+### Contribution 2 — Oracle-gap diagnostic result
 
-> We introduce an oracle-evidence diagnostic protocol to separate retrieval failures from reader/reasoning failures in long-term memory evaluation.
+> We run an oracle evidence diagnostic showing that replacing BM25 session retrieval with gold evidence sessions raises answerable accuracy from 0.7340 to 0.9170 and recovers 68.8% of answerable failures.
 
-### Contribution 3 — Evidence-level retrieval and structured reading
+### Contribution 3 — Evidence selection bottleneck analysis
+
+> The largest oracle gains occur in multi-session and temporal reasoning, suggesting that long-term memory systems require evidence-level selection and structured context construction rather than more raw session retrieval.
+
+### Contribution 4 — Evidence-level retrieval and structured reading
 
 > We propose turn/chunk-level evidence retrieval combined with evidence-table reading to reduce context noise and address aggregation, temporal filtering, and event-status errors.
 
-### Contribution 4 — Evidence-grounded memory representation
+### Contribution 5 — Evidence-grounded memory representation
 
 > We propose a memory representation where every fact, event, preference and reflection is linked to evidence_ids and confidence, enabling auditability and reducing unsupported memory use.
 
-### Contribution 5 — Grounded reflection for multi-session memory
+### Contribution 6 — Grounded reflection for multi-session memory
 
 > We investigate evidence-grounded reflection as a mechanism for improving multi-session synthesis while preserving traceability to raw evidence.
 
-### Contribution 6 — Temporal and versioned memory
+### Contribution 7 — Temporal and versioned memory
 
 > We extend the memory manager with temporal/event-aware retrieval and versioned update to reduce stale-memory and temporal-validity errors.
 
 ---
 
+## 23. Safe vs unsafe claims sau A0.5
+
+### Safe claims
+
+Có thể viết:
+
+```text
+A0.5 is an oracle diagnostic, not a deployable method.
+```
+
+```text
+Oracle evidence sessions improve answerable accuracy from 0.7340 to 0.9170.
+```
+
+```text
+A0.5 recovers 86 out of 125 A0 answerable failures, equal to 68.8% error recovery.
+```
+
+```text
+The largest gains are on multi-session and temporal reasoning.
+```
+
+```text
+These results motivate turn/chunk-level evidence retrieval and compact evidence context.
+```
+
+### Unsafe claims
+
+Không nên viết:
+
+```text
+Our method achieves 0.9170 accuracy.
+```
+
+```text
+We solve LongMemEval-S.
+```
+
+```text
+Oracle evidence reader is our proposed memory manager.
+```
+
+```text
+Evidence selection bottleneck has never been studied before.
+```
+
+Lý do:
+
+```text
+A0.5 dùng gold answer_session_ids.
+Oracle setting là upper bound/diagnostic, không phải deployable system.
+```
+
+---
+
+## 24. Kết quả nghiên cứu có thể báo cáo ngay
+
+A0 + A0.5 đủ để báo cáo như một preliminary/diagnostic result:
+
+```text
+1. A0: BM25 session baseline đạt 0.7360 overall accuracy.
+2. A0 answerable-only accuracy là 0.7340.
+3. A0.5 oracle evidence đạt 0.9170 answerable accuracy.
+4. Oracle gap là +0.1830.
+5. Oracle recovered 68.8% answerable failures.
+6. Multi-session và temporal reasoning là hai nhóm được oracle cứu nhiều nhất.
+7. Oracle context giảm prompt tokens khoảng 48.25% so với A0 session@5.
+```
+
+Cách viết contribution hiện tại:
+
+> We present a diagnostic study showing that evidence selection is the dominant bottleneck for our BM25 session baseline on LongMemEval-S cleaned. Oracle evidence sessions recover 68.8% of answerable failures and reduce prompt tokens by 48.25%, motivating a non-oracle evidence-level memory manager.
+
+---
+
+## 25. Quyết định tiếp theo
+
+### 25.1. Next-small
+
+Chạy:
+
+```text
+A0.5b — Complete Diagnostic Suite
+```
+
+Mục tiêu:
+
+```text
+- Có failed-case taxonomy.
+- Có completion diagnostic.
+- Có standardized retrieval metrics.
+- Có prompt dump check.
+- Có judge audit.
+```
+
+### 25.2. Next-main
+
+Triển khai:
+
+```text
+A1 — Turn/chunk-level evidence retrieval + compact evidence context
+```
+
+Mục tiêu:
+
+```text
+- Đóng một phần oracle gap.
+- Giảm token cost.
+- Tăng multi-session accuracy.
+- Tăng temporal-reasoning accuracy.
+```
+
+### 25.3. Next-after-A1
+
+Triển khai:
+
+```text
+A2 — Evidence-table reader
+```
+
+Mục tiêu:
+
+```text
+- Giảm aggregation errors.
+- Giảm temporal filtering errors.
+- Giảm event-status errors.
+- Cải thiện các oracle remaining failures.
+```
+
+---
+
 ## 26. Kết luận cập nhật
 
-A0 đã xác nhận hướng nghiên cứu là hợp lý.
+A0 đã cho thấy baseline BM25 session-level có hiệu quả vừa đủ nhưng yếu ở multi-session và temporal reasoning.
 
-Kết quả quan trọng nhất không phải là:
-
-```text
-BM25 session đạt 0.7360 accuracy.
-```
-
-Mà là:
+A0.5 đã xác nhận mạnh hơn:
 
 ```text
-BM25 session-level retrieval khá tốt ở factual/update questions,
-nhưng yếu rõ ở multi-session và temporal reasoning,
-trong khi token cost rất cao và nhiều lỗi không chỉ do retrieval miss.
+Nếu đưa đúng evidence sessions,
+answerable accuracy tăng từ 0.7340 lên 0.9170.
 ```
 
-Vì vậy, next action đúng là:
+Do đó, hướng nghiên cứu hiện tại là đúng, nhưng priority cần rõ:
 
 ```text
-A0.5 Oracle + Diagnostic Benchmark
+A0.5b diagnostics
+→ A1 turn/chunk-level evidence retrieval
+→ A2 evidence-table reader
+→ A3 structured memory writer
+→ A4 evidence-grounded reflection
+→ A5 temporal/event-aware retrieval
+→ A6 versioned updater
 ```
 
-Sau đó nhiều khả năng đi tiếp theo hướng:
+Kết luận nghiên cứu quan trọng nhất hiện tại:
 
-```text
-A1 BM25 turn/chunk retrieval
-+
-A2 Evidence-table reader
-```
-
-Đây là đường đi ngắn nhất để biến kết quả A0 thành một đóng góp nghiên cứu rõ ràng:
-
-> Memory tốt cho Agentic AI không chỉ là retrieve nhiều hơn, mà là retrieve đúng evidence ở đúng granularity, tổ chức evidence thành memory có cấu trúc, hỗ trợ temporal/event reasoning, và đảm bảo mọi reflection đều truy ngược được về bằng chứng.
+> Memory tốt cho Agentic AI không chỉ là retrieve nhiều hơn, mà là retrieve đúng evidence ở đúng granularity, giảm context noise, giữ metadata thời gian/sự kiện, và đảm bảo mọi memory hoặc reflection đều truy ngược được về evidence_ids.
